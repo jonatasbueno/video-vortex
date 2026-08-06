@@ -12,6 +12,7 @@ import {
 } from './platforms/catalog.js';
 import { detectPlatform, isAdultPlatform, isValidHttpUrl } from './platforms/detect.js';
 import { AutocompleteSelect } from './ui/AutocompleteSelect.js';
+import { ProgressBar } from './ui/ProgressBar.js';
 import { downloadVideo, probeVideo } from './download/downloader.js';
 import { buildFilenameBase } from './download/filename.js';
 import { getDefaultDownloadDir } from './config/paths.js';
@@ -38,6 +39,7 @@ export function App({ initialUrl = '', initialDir }: AppProps): React.ReactEleme
   const [savedPath, setSavedPath] = useState('');
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
+  const [progress, setProgress] = useState(0);
   const [againDraft, setAgainDraft] = useState('');
   const bootstrapped = React.useRef(false);
 
@@ -80,6 +82,7 @@ export function App({ initialUrl = '', initialDir }: AppProps): React.ReactEleme
     setSavedPath('');
     setError('');
     setStatus('');
+    setProgress(0);
   }, []);
 
   const startProbe = useCallback(
@@ -199,15 +202,21 @@ export function App({ initialUrl = '', initialDir }: AppProps): React.ReactEleme
     if (!selectedFormat) return;
     setStep('downloading');
     setStatus(t('downloading'));
+    setProgress(0);
     try {
-      setStatus(t('downloading'));
-      const result = await downloadVideo({
-        url,
-        formatId: selectedFormat.formatId,
-        outputDir: dir,
-        filenameBase,
-        platformId: platform?.id,
-      });
+      const result = await downloadVideo(
+        {
+          url,
+          formatId: selectedFormat.formatId,
+          outputDir: dir,
+          filenameBase,
+          platformId: platform?.id,
+        },
+        {
+          onProgress: (percent) => setProgress(percent),
+        },
+      );
+      setProgress(100);
       setStatus(t('stripping'));
       setSavedPath(result.filePath);
       setStep('done');
@@ -285,8 +294,15 @@ export function App({ initialUrl = '', initialDir }: AppProps): React.ReactEleme
         </Box>
       )}
 
-      {(step === 'probing' || step === 'downloading') && (
-        <Text color="cyan">{status || t('probing')}</Text>
+      {step === 'probing' && <Text color="cyan">{status || t('probing')}</Text>}
+
+      {step === 'downloading' && (
+        <Box flexDirection="column">
+          <Text color="cyan">{status || t('downloading')}</Text>
+          <Box marginTop={1}>
+            <ProgressBar percent={progress} />
+          </Box>
+        </Box>
       )}
 
       {step === 'format' && (

@@ -5,6 +5,12 @@ import type { DownloadRequest, DownloadResult, VideoProbeResult } from '../types
 import { buildFilenameBase } from './filename.js';
 import { buildFormatOptions, type RawYtdlpInfo } from './formats.js';
 import { isFfmpegAvailable, stripMetadata } from './metadata.js';
+import { attachProgressListener } from './progress.js';
+
+export type YtDlpExecResult = Promise<{ stdout?: string; stderr?: string }> & {
+  stderr?: NodeJS.ReadableStream;
+  stdout?: NodeJS.ReadableStream;
+};
 
 export type YtDlpLike = {
   (url: string, flags?: Record<string, unknown>): Promise<unknown>;
@@ -12,7 +18,7 @@ export type YtDlpLike = {
     url: string,
     flags?: Record<string, unknown>,
     options?: Record<string, unknown>,
-  ) => Promise<{ stdout: string }>;
+  ) => YtDlpExecResult;
 };
 
 let client: YtDlpLike = youtubeDl as unknown as YtDlpLike;
@@ -53,20 +59,40 @@ export async function ensureDownloadDir(dir: string): Promise<string> {
   return resolved;
 }
 
-export async function downloadVideo(request: DownloadRequest): Promise<DownloadResult> {
+export interface DownloadOptions {
+  onProgress?: (percent: number) => void;
+}
+
+export async function downloadVideo(
+  request: DownloadRequest,
+  options: DownloadOptions = {},
+): Promise<DownloadResult> {
   const outputDir = await ensureDownloadDir(request.outputDir);
   const outputTemplate = path.join(outputDir, `${request.filenameBase}.%(ext)s`);
 
-  await client(request.url, {
+  const flags = {
     format: request.formatId,
     output: outputTemplate,
     noCheckCertificates: true,
     noWarnings: true,
     mergeOutputFormat: 'mp4',
     restrictFilenames: false,
-  });
+    newline: true,
+    progress: true,
+  };
 
-  // Resolve actual file: yt-dlp replaces %(ext)s
+  const subprocess = client.exec(request.url, flags);
+  const detach = options.onProgress
+    ? attachProgressListener(subprocess.stderr, options.onProgress)
+    : () => undefined;
+
+  try {
+    await subprocess;
+    options.onProgress?.(100);
+  } finally {
+    detach();
+  }
+
   const { readdir } = await import('node:fs/promises');
   const files = await readdir(outputDir);
   const match = files

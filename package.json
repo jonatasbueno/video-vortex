@@ -1,7 +1,7 @@
 {
   "name": "video-vortex",
-  "version": "0.1.0",
-  "description": "Interactive terminal CLI to download videos from popular platforms with resolution and format selection.",
+  "version": "0.2.0",
+  "description": "Interactive terminal CLI to download videos from popular platforms with resolution/format selection and a full-width progress bar.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -43,6 +43,7 @@
     "facebook",
     "yt-dlp",
     "terminal",
+    "progress-bar",
     "video-vortex"
   ],
   "author": "Jônatas Bueno <jonatas.livramento@gmail.com>",

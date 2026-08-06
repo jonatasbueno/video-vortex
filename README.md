@@ -53,7 +53,15 @@ Ao iniciar, o banner **Video Vortex** é exibido. Em seguida:
 2. Se a plataforma não for detectada, selecione na lista (↑/↓) — digite para filtrar (autocomplete)
 3. Escolha resolução **e** formato entre as opções realmente oferecidas pelo vídeo (com tamanho em MB quando disponível)
 4. Confirme ou altere o diretório de download (padrão: `~/Downloads/VideoVortex`)
-5. Aguarde o download e a limpeza de metadados
+5. Acompanhe o download na **barra de progresso** em largura total (esquerda → direita) com a porcentagem à direita; a limpeza de metadados roda em seguida
+
+## Barra de progresso
+
+Durante o download, o Video Vortex exibe uma barra full-width:
+
+- Preenchimento da esquerda para a direita
+- Porcentagem alinhada ao canto direito da linha
+- Quando a barra cobre parte do número, os dígitos sobrepostos aparecem na cor invertida (negativa) em relação à cor da barra
 
 ### Exemplos
 
@@ -99,7 +107,13 @@ O título é convertido para `snake_case`. Se o diretório informado não existi
 O pacote publica tipagens embutidas (`dist/*.d.ts`). Você pode importar utilitários:
 
 ```ts
-import { detectPlatform, buildFormatOptions, toSnakeCase } from 'video-vortex';
+import {
+  detectPlatform,
+  buildFormatOptions,
+  toSnakeCase,
+  renderFullProgressBar,
+  parseDownloadPercent,
+} from 'video-vortex';
 ```
 
 ## Desenvolvimento

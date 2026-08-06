@@ -15,6 +15,8 @@ export { probeVideo, downloadVideo, ensureDownloadDir, setYtDlpClient, resetYtDl
 export { setLocale, getLocale, normalizeLocale, t } from './i18n/index.js';
 export { getAsciiArt, renderBanner } from './ui/banner.js';
 export { filterItems } from './ui/filterItems.js';
+export { renderFullProgressBar, formatPercentLabel } from './ui/renderProgressBar.js';
+export { parseDownloadPercent } from './download/progress.js';
 export type {
   Platform,
   FormatOption,
