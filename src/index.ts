@@ -11,12 +11,19 @@ export {
 export { buildFormatOptions, bytesToMbLabel, resolutionLabel } from './download/formats.js';
 export { toSnakeCase, formatTimestamp, buildFilenameBase } from './download/filename.js';
 export { getDefaultDownloadDir } from './config/paths.js';
-export { probeVideo, downloadVideo, ensureDownloadDir, setYtDlpClient, resetYtDlpClient } from './download/downloader.js';
+export { probeVideo, downloadVideo, ensureDownloadDir, DEFAULT_PROBE_TIMEOUT_MS, YtDlpError } from './download/downloader.js';
+export { summarizeStderr } from './download/runYtdlp.js';
 export { setLocale, getLocale, normalizeLocale, t } from './i18n/index.js';
 export { getAsciiArt, renderBanner } from './ui/banner.js';
 export { filterItems } from './ui/filterItems.js';
 export { renderFullProgressBar, formatPercentLabel } from './ui/renderProgressBar.js';
-export { parseDownloadPercent } from './download/progress.js';
+export { parseDownloadPercent, parseAllDownloadPercents } from './download/progress.js';
+export {
+  resolveDisplayProgress,
+  nextDripPercent,
+  DRIP_INTERVAL_MS,
+  DRIP_CAP_PERCENT,
+} from './download/displayProgress.js';
 export type {
   Platform,
   FormatOption,

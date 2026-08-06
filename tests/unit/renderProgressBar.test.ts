@@ -15,47 +15,44 @@ describe('renderFullProgressBar', () => {
   const colors = {
     barBg: (t: string) => `[F:${t}]`,
     barLabel: (t: string) => `[I:${t}]`,
-    trackBg: (t: string) => `[E:${t}]`,
-    trackLabel: (t: string) => `[L:${t}]`,
+    empty: (t: string) => `[E:${t}]`,
+    emptyLabel: (t: string) => `[L:${t}]`,
   };
 
-  it('fills left to right and pins percent on the right', () => {
+  it('grows a single fill over empty space (not over a track bar)', () => {
     const width = 10;
-    // 50% of 10 = 5 filled
+    // 50% of 10 = 5 filled, 5 empty
     const line = renderFullProgressBar(50, width, colors);
     expect(line.startsWith('[F: ]')).toBe(true);
+    expect(line).toContain('[E: ]');
     expect(line).toContain('[L:');
     expect(line).toContain('5');
     expect(line).toContain('%');
   });
 
+  it('at 0% is only empty space plus label (no fill bar underneath)', () => {
+    const width = 20;
+    const line = renderFullProgressBar(0, width, colors);
+    expect(line).not.toContain('[F:');
+    expect(line).toContain('[E: ]');
+    expect(line).toContain('[L:0]');
+    expect(line).toContain('[L:%]');
+  });
+
   it('inverts label characters covered by the bar', () => {
     const width = 10;
-    // 100% fills entire width including label → all label chars inverted
     const full = renderFullProgressBar(100, width, colors);
     expect(full).toContain('[I:1]');
     expect(full).toContain('[I:0]');
-    expect(full).toContain('[I:0]');
     expect(full).toContain('[I:%]');
     expect(full).not.toContain('[L:');
-  });
-
-  it('keeps uncovered label on track color at low progress', () => {
-    const width = 20;
-    const line = renderFullProgressBar(0, width, colors);
-    expect(line).toContain('[L: ');
-    expect(line).toContain('[L:0]');
-    expect(line).toContain('[L:%]');
-    expect(line).not.toContain('[I:');
+    expect(full).not.toContain('[E:');
   });
 
   it('partially inverts when bar overlaps only part of the label', () => {
     const width = 10;
-    // filled = round(0.8 * 10) = 8; label at 6..9 (" 80%")
-    // indices 6,7 filled+label → inverted; 8,9 unfilled+label → track label
     const line = renderFullProgressBar(80, width, colors);
     expect(line).toContain('[I:');
     expect(line).toContain('[L:');
   });
 });
-

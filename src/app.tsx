@@ -13,7 +13,13 @@ import {
 import { detectPlatform, isAdultPlatform, isValidHttpUrl } from './platforms/detect.js';
 import { AutocompleteSelect } from './ui/AutocompleteSelect.js';
 import { ProgressBar } from './ui/ProgressBar.js';
-import { downloadVideo, probeVideo } from './download/downloader.js';
+import { downloadVideo, probeVideo, DEFAULT_PROBE_TIMEOUT_MS } from './download/downloader.js';
+import {
+  DRIP_INTERVAL_MS,
+  nextDripPercent,
+  progressBarWidth,
+  resolveDisplayProgress,
+} from './download/displayProgress.js';
 import { buildFilenameBase } from './download/filename.js';
 import { getDefaultDownloadDir } from './config/paths.js';
 import { t } from './i18n/index.js';
@@ -39,9 +45,14 @@ export function App({ initialUrl = '', initialDir }: AppProps): React.ReactEleme
   const [savedPath, setSavedPath] = useState('');
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
-  const [progress, setProgress] = useState(0);
+  const [dripProgress, setDripProgress] = useState(0);
+  const [realProgress, setRealProgress] = useState(0);
+  const [hasRealProgress, setHasRealProgress] = useState(false);
+  const [probeSeconds, setProbeSeconds] = useState(0);
   const [againDraft, setAgainDraft] = useState('');
   const bootstrapped = React.useRef(false);
+
+  const displayProgress = resolveDisplayProgress(dripProgress, realProgress);
 
   const mainItems: SelectItem[] = useMemo(() => {
     const items = getMainPlatformList().map((p) => ({
@@ -82,16 +93,42 @@ export function App({ initialUrl = '', initialDir }: AppProps): React.ReactEleme
     setSavedPath('');
     setError('');
     setStatus('');
-    setProgress(0);
+    setDripProgress(0);
+    setRealProgress(0);
+    setHasRealProgress(false);
+    setProbeSeconds(0);
   }, []);
+
+  // Option A: drip one bar column every 500ms until yt-dlp reports real %.
+  React.useEffect(() => {
+    if (step !== 'downloading' || hasRealProgress) return;
+    const width = progressBarWidth(process.stdout.columns);
+    const id = setInterval(() => {
+      setDripProgress((current) => nextDripPercent(current, width));
+    }, DRIP_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [step, hasRealProgress]);
 
   const startProbe = useCallback(
     async (targetUrl: string, selected: Platform | null) => {
       setStep('probing');
       setStatus(t('probing'));
+      setProbeSeconds(0);
       setError('');
+
+      const startedAt = Date.now();
+      const tick = setInterval(() => {
+        setProbeSeconds(Math.floor((Date.now() - startedAt) / 1000));
+      }, 500);
+
       try {
-        const probe = await probeVideo(targetUrl, t('sizeUnavailable'));
+        const timeoutSec = Math.round(DEFAULT_PROBE_TIMEOUT_MS / 1000);
+        const probe = await probeVideo(targetUrl, {
+          sizeUnavailableLabel: t('sizeUnavailable'),
+          timeoutMs: DEFAULT_PROBE_TIMEOUT_MS,
+          timeoutMessage: t('probeTimeout', { seconds: String(timeoutSec) }),
+          noFormatsMessage: t('noFormats'),
+        });
         setTitle(probe.title);
         setFilenameBase(buildFilenameBase(probe.title));
         setFormats(probe.formats);
@@ -100,6 +137,8 @@ export function App({ initialUrl = '', initialDir }: AppProps): React.ReactEleme
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
         setStep('error');
+      } finally {
+        clearInterval(tick);
       }
     },
     [],
@@ -202,7 +241,9 @@ export function App({ initialUrl = '', initialDir }: AppProps): React.ReactEleme
     if (!selectedFormat) return;
     setStep('downloading');
     setStatus(t('downloading'));
-    setProgress(0);
+    setDripProgress(0);
+    setRealProgress(0);
+    setHasRealProgress(false);
     try {
       const result = await downloadVideo(
         {
@@ -213,10 +254,15 @@ export function App({ initialUrl = '', initialDir }: AppProps): React.ReactEleme
           platformId: platform?.id,
         },
         {
-          onProgress: (percent) => setProgress(percent),
+          onProgress: (percent) => {
+            setHasRealProgress(true);
+            setRealProgress(percent);
+          },
         },
       );
-      setProgress(100);
+      setHasRealProgress(true);
+      setRealProgress(100);
+      setDripProgress(100);
       setStatus(t('stripping'));
       setSavedPath(result.filePath);
       setStep('done');
@@ -294,13 +340,19 @@ export function App({ initialUrl = '', initialDir }: AppProps): React.ReactEleme
         </Box>
       )}
 
-      {step === 'probing' && <Text color="cyan">{status || t('probing')}</Text>}
+      {step === 'probing' && (
+        <Box flexDirection="column">
+          <Text color="cyan">
+            {t('probingElapsed', { seconds: String(probeSeconds) })}
+          </Text>
+        </Box>
+      )}
 
       {step === 'downloading' && (
         <Box flexDirection="column">
           <Text color="cyan">{status || t('downloading')}</Text>
           <Box marginTop={1}>
-            <ProgressBar percent={progress} />
+            <ProgressBar percent={displayProgress} />
           </Box>
         </Box>
       )}
@@ -357,12 +409,17 @@ export function App({ initialUrl = '', initialDir }: AppProps): React.ReactEleme
 
       {step === 'error' && (
         <Box flexDirection="column">
-          <Text color="red">
-            {t('error')} {error}
+          <Text color="red" bold>
+            {t('error')}
           </Text>
+          {error.split('\n').map((line, idx) => (
+            <Text key={`${idx}-${line.slice(0, 24)}`} color="red">
+              {line}
+            </Text>
+          ))}
           <Box marginTop={1}>
             <AutocompleteSelect
-              title=""
+              title={t('retryPrompt')}
               items={[
                 { value: 'retry', label: t('yes') },
                 { value: 'quit', label: t('no') },

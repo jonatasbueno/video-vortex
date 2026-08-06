@@ -15,56 +15,61 @@ vi.mock('../../src/download/metadata.js', async () => {
   };
 });
 
-import {
-  downloadVideo,
-  ensureDownloadDir,
-  probeVideo,
-  resetYtDlpClient,
-  setYtDlpClient,
-  type YtDlpLike,
-} from '../../src/download/downloader.js';
+import { downloadVideo, ensureDownloadDir, probeVideo, YtDlpError } from '../../src/download/downloader.js';
+import { resetYtDlpSpawner, setYtDlpSpawner } from '../../src/download/spawnYtdlp.js';
 
-function mockClient(handlers: {
-  probe?: () => Promise<unknown>;
-  download?: (url: string, flags?: Record<string, unknown>) => Promise<void>;
+function mockProcess(options: {
+  stdout?: string;
+  stderr?: string;
   progressChunks?: string[];
-}): YtDlpLike {
-  return Object.assign(
-    async (url: string, flags?: Record<string, unknown>) => {
-      if (flags?.dumpSingleJson) {
-        return handlers.probe?.() ?? {};
+  exitCode?: number;
+  hangMs?: number;
+  writeFileFromArgs?: (args: string[]) => Promise<void>;
+}): Parameters<typeof setYtDlpSpawner>[0] {
+  return (_cmd, args) => {
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const child = Object.assign(new EventEmitter(), {
+      stdout,
+      stderr,
+      stdin: new EventEmitter(),
+      kill: vi.fn(() => {
+        queueMicrotask(() => child.emit('close', 1, 'SIGTERM'));
+        return true;
+      }),
+    });
+
+    queueMicrotask(async () => {
+      if (options.hangMs) {
+        await new Promise((r) => setTimeout(r, options.hangMs));
+        return; // wait for kill from timeout
       }
-      await handlers.download?.(url, flags);
-      return {};
-    },
-    {
-      exec: (url: string, flags?: Record<string, unknown>) => {
-        const stderr = new EventEmitter() as EventEmitter & NodeJS.ReadableStream;
-        const promise = (async () => {
-          await handlers.download?.(url, flags);
-          // Let downloadVideo attach the stderr listener before emitting progress
-          await new Promise<void>((resolve) => setImmediate(resolve));
-          for (const chunk of handlers.progressChunks ?? []) {
-            stderr.emit('data', Buffer.from(chunk));
-          }
-          return { stdout: '', stderr: '' };
-        })();
-        return Object.assign(promise, { stderr }) as ReturnType<YtDlpLike['exec']>;
-      },
-    },
-  );
+      await options.writeFileFromArgs?.(args);
+      if (options.stdout) stdout.emit('data', Buffer.from(options.stdout));
+      if (options.stderr) stderr.emit('data', Buffer.from(options.stderr));
+      for (const chunk of options.progressChunks ?? []) {
+        stderr.emit('data', Buffer.from(chunk));
+        await new Promise<void>((r) => setImmediate(r));
+      }
+      stdout.emit('end');
+      stderr.emit('end');
+      child.emit('close', options.exitCode ?? 0, null);
+    });
+
+    return child as ReturnType<Parameters<typeof setYtDlpSpawner>[0]>;
+  };
 }
 
 describe('downloader integration (mocked yt-dlp)', () => {
   afterEach(() => {
-    resetYtDlpClient();
+    resetYtDlpSpawner();
     vi.clearAllMocks();
   });
 
   it('probes formats from dump json', async () => {
-    setYtDlpClient(
-      mockClient({
-        probe: async () => ({
+    setYtDlpSpawner(
+      mockProcess({
+        stdout: JSON.stringify({
           title: 'Demo Clip',
           webpage_url: 'https://youtube.com/watch?v=1',
           formats: [
@@ -87,14 +92,43 @@ describe('downloader integration (mocked yt-dlp)', () => {
     expect(probe.formats[0]?.label).toContain('mp4');
   });
 
+  it('surfaces yt-dlp stderr on probe failure', async () => {
+    setYtDlpSpawner(
+      mockProcess({
+        exitCode: 1,
+        stderr: 'ERROR: Sign in to confirm you’re not a bot',
+      }),
+    );
+
+    await expect(probeVideo('https://youtube.com/watch?v=1', { timeoutMs: 5_000 })).rejects.toThrow(
+      /bot|ERROR/i,
+    );
+  });
+
+  it('times out hanging probes and reports failure', async () => {
+    setYtDlpSpawner(
+      mockProcess({
+        // Never closes unless kill() is called by the timeout path
+        hangMs: 60_000,
+      }),
+    );
+
+    await expect(
+      probeVideo('https://youtube.com/watch?v=1', {
+        timeoutMs: 100,
+        timeoutMessage: 'Tempo esgotado ao consultar formatos (0s).',
+      }),
+    ).rejects.toThrow(/Tempo esgotado/);
+  }, 3_000);
+
   it('downloads into ensured directory with expected filename prefix', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'vv-'));
-    setYtDlpClient(
-      mockClient({
-        download: async (_url, flags) => {
-          const output = String(flags?.output ?? '');
-          const file = output.replace('%(ext)s', 'mp4');
-          await writeFile(file, 'fake-video');
+    setYtDlpSpawner(
+      mockProcess({
+        writeFileFromArgs: async (args) => {
+          const outputIdx = args.indexOf('--output');
+          const output = outputIdx >= 0 ? args[outputIdx + 1]! : '';
+          await writeFile(output.replace('%(ext)s', 'mp4'), 'fake-video');
         },
       }),
     );
@@ -111,16 +145,22 @@ describe('downloader integration (mocked yt-dlp)', () => {
     expect(content).toBe('fake-video');
   });
 
-  it('reports progress callbacks from yt-dlp stderr', async () => {
+  it('reports progress callbacks incrementally from yt-dlp stderr', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'vv-'));
     const percents: number[] = [];
-    setYtDlpClient(
-      mockClient({
-        download: async (_url, flags) => {
-          const output = String(flags?.output ?? '');
+
+    setYtDlpSpawner(
+      mockProcess({
+        writeFileFromArgs: async (args) => {
+          const outputIdx = args.indexOf('--output');
+          const output = outputIdx >= 0 ? args[outputIdx + 1]! : '';
           await writeFile(output.replace('%(ext)s', 'mp4'), 'x');
         },
-        progressChunks: ['[download]  33.0% of 1MiB\n', '[download]  77.0% of 1MiB\n'],
+        progressChunks: [
+          '[download]  10.0% of 1MiB\n',
+          '[download]  40.0% of 1MiB\n',
+          '[download]  80.0% of 1MiB\n',
+        ],
       }),
     );
 
@@ -134,8 +174,7 @@ describe('downloader integration (mocked yt-dlp)', () => {
       { onProgress: (p) => percents.push(p) },
     );
 
-    expect(percents).toContain(33);
-    expect(percents).toContain(77);
+    expect(percents.filter((p) => p < 100)).toEqual([10, 40, 80]);
     expect(percents.at(-1)).toBe(100);
   });
 

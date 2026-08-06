@@ -59,9 +59,11 @@ Ao iniciar, o banner **Video Vortex** é exibido. Em seguida:
 
 Durante o download, o Video Vortex exibe uma barra full-width:
 
-- Preenchimento da esquerda para a direita
+- Preenchimento cinza crescendo da esquerda para a direita sobre o vazio (sem trilho por baixo)
 - Porcentagem alinhada ao canto direito da linha
-- Quando a barra cobre parte do número, os dígitos sobrepostos aparecem na cor invertida (negativa) em relação à cor da barra
+- Quando a barra cobre parte do número, os dígitos sobrepostos aparecem na cor invertida
+- Enquanto o yt-dlp ainda não envia `%`, a barra avança 1 coluna a cada 500ms (até um teto suave); depois usa `max(drip, progresso real)`
+- Se a consulta de formatos falhar ou estourar o tempo, a tela de erro mostra o motivo (incluindo saída do yt-dlp)
 
 ### Exemplos
 

@@ -1,49 +1,66 @@
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import youtubeDl from 'youtube-dl-exec';
 import type { DownloadRequest, DownloadResult, VideoProbeResult } from '../types.js';
 import { buildFilenameBase } from './filename.js';
 import { buildFormatOptions, type RawYtdlpInfo } from './formats.js';
 import { isFfmpegAvailable, stripMetadata } from './metadata.js';
 import { attachProgressListener } from './progress.js';
+import { YtDlpError, parseJsonStdout, runYtDlp, summarizeStderr } from './runYtdlp.js';
+import { spawnYtDlp, waitForProcess } from './spawnYtdlp.js';
 
-export type YtDlpExecResult = Promise<{ stdout?: string; stderr?: string }> & {
-  stderr?: NodeJS.ReadableStream;
-  stdout?: NodeJS.ReadableStream;
-};
+/** Default probe timeout (90s). */
+export const DEFAULT_PROBE_TIMEOUT_MS = 90_000;
 
-export type YtDlpLike = {
-  (url: string, flags?: Record<string, unknown>): Promise<unknown>;
-  exec: (
-    url: string,
-    flags?: Record<string, unknown>,
-    options?: Record<string, unknown>,
-  ) => YtDlpExecResult;
-};
-
-let client: YtDlpLike = youtubeDl as unknown as YtDlpLike;
-
-/** Allow tests to inject a mock client. */
-export function setYtDlpClient(next: YtDlpLike): void {
-  client = next;
+export interface ProbeOptions {
+  sizeUnavailableLabel?: string;
+  timeoutMs?: number;
+  timeoutMessage?: string;
+  noFormatsMessage?: string;
 }
 
-export function resetYtDlpClient(): void {
-  client = youtubeDl as unknown as YtDlpLike;
-}
+export async function probeVideo(
+  url: string,
+  sizeUnavailableLabelOrOptions?: string | ProbeOptions,
+): Promise<VideoProbeResult> {
+  const options: ProbeOptions =
+    typeof sizeUnavailableLabelOrOptions === 'string' || sizeUnavailableLabelOrOptions == null
+      ? { sizeUnavailableLabel: sizeUnavailableLabelOrOptions }
+      : sizeUnavailableLabelOrOptions;
 
-export async function probeVideo(url: string, sizeUnavailableLabel?: string): Promise<VideoProbeResult> {
-  const raw = (await client(url, {
-    dumpSingleJson: true,
-    noCheckCertificates: true,
-    noWarnings: true,
-    preferFreeFormats: false,
-    skipDownload: true,
-  })) as RawYtdlpInfo;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
 
-  const formats = buildFormatOptions(raw.formats ?? [], sizeUnavailableLabel);
+  let stdout = '';
+  let stderr = '';
+  try {
+    const result = await runYtDlp({
+      url,
+      flags: {
+        dumpSingleJson: true,
+        noCheckCertificates: true,
+        // Do not pass noWarnings: false — dargs turns it into --no-no-warnings
+        preferFreeFormats: false,
+        skipDownload: true,
+      },
+      timeoutMs,
+      timeoutMessage: options.timeoutMessage,
+    });
+    stdout = result.stdout;
+    stderr = result.stderr;
+  } catch (error) {
+    if (error instanceof YtDlpError) throw error;
+    throw error;
+  }
+
+  const raw = parseJsonStdout<RawYtdlpInfo>(stdout, stderr);
+  const formats = buildFormatOptions(raw.formats ?? [], options.sizeUnavailableLabel);
   if (formats.length === 0) {
-    throw new Error('No downloadable formats found for this URL.');
+    const detail = summarizeStderr(stderr);
+    throw new YtDlpError(
+      detail
+        ? `${options.noFormatsMessage ?? 'No downloadable formats found for this URL.'}\n${detail}`
+        : (options.noFormatsMessage ?? 'No downloadable formats found for this URL.'),
+      { stderr },
+    );
   }
 
   return {
@@ -76,21 +93,22 @@ export async function downloadVideo(
     noCheckCertificates: true,
     noWarnings: true,
     mergeOutputFormat: 'mp4',
-    restrictFilenames: false,
+    // Omit boolean false flags — dargs emits --no-* and some are invalid (e.g. --no-console-title)
     newline: true,
     progress: true,
   };
 
-  const subprocess = client.exec(request.url, flags);
-  const detach = options.onProgress
-    ? attachProgressListener(subprocess.stderr, options.onProgress)
-    : () => undefined;
+  const child = spawnYtDlp(request.url, flags);
+  const progress = options.onProgress
+    ? attachProgressListener(child.stderr, options.onProgress)
+    : null;
 
   try {
-    await subprocess;
+    await waitForProcess(child);
+    await progress?.flush();
     options.onProgress?.(100);
   } finally {
-    detach();
+    progress?.detach();
   }
 
   const { readdir } = await import('node:fs/promises');
@@ -120,9 +138,11 @@ export async function probeAndPrepareFilename(
   sizeUnavailableLabel?: string,
   now: Date = new Date(),
 ): Promise<{ probe: VideoProbeResult; filenameBase: string }> {
-  const probe = await probeVideo(url, sizeUnavailableLabel);
+  const probe = await probeVideo(url, { sizeUnavailableLabel });
   return {
     probe,
     filenameBase: buildFilenameBase(probe.title, now),
   };
 }
+
+export { YtDlpError, summarizeStderr };
